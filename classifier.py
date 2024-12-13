@@ -1,5 +1,5 @@
 import torch.nn as nn
-from torch.nn.utils.weight_norm import weight_norm
+from torch.nn.utils.parametrizations import weight_norm
 
 
 class SimpleClassifier(nn.Module):
@@ -8,7 +8,7 @@ class SimpleClassifier(nn.Module):
         layers = [
             weight_norm(nn.Linear(in_dim, hid_dim), dim=None),
             nn.ReLU(),
-            nn.Dropout(dropout, inplace=True),
+            nn.Dropout(dropout, inplace=False),
             weight_norm(nn.Linear(hid_dim, out_dim), dim=None)
         ]
         self.main = nn.Sequential(*layers)

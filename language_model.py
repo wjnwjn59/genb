@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 import numpy as np
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class WordEmbedding(nn.Module):
     """Word Embedding
@@ -12,35 +12,35 @@ class WordEmbedding(nn.Module):
     """
     def __init__(self, ntoken, emb_dim, dropout):
         super(WordEmbedding, self).__init__()
-        self.emb = nn.Embedding(ntoken+1, emb_dim, padding_idx=ntoken)
+        self.emb = nn.Embedding(ntoken + 1, emb_dim, padding_idx=ntoken)
         self.dropout = nn.Dropout(dropout)
         self.ntoken = ntoken
         self.emb_dim = emb_dim
 
     def init_embedding(self, np_file):
-        weight_init = torch.from_numpy(np.load(np_file))
+        weight_init = torch.from_numpy(np.load(np_file)).to(device)
         assert weight_init.shape == (self.ntoken, self.emb_dim)
         self.emb.weight.data[:self.ntoken] = weight_init
 
     def forward(self, x):
-        emb = self.emb(x)
+        emb = self.emb(x.to(device))
         emb = self.dropout(emb)
         return emb
-
 
 class QuestionEmbedding(nn.Module):
     def __init__(self, in_dim, num_hid, nlayers, bidirect, dropout, rnn_type='GRU'):
         """Module for question embedding
         """
         super(QuestionEmbedding, self).__init__()
-        assert rnn_type == 'LSTM' or rnn_type == 'GRU'
+        assert rnn_type in ['LSTM', 'GRU']
         rnn_cls = nn.LSTM if rnn_type == 'LSTM' else nn.GRU
 
         self.rnn = rnn_cls(
             in_dim, num_hid, nlayers,
             bidirectional=bidirect,
             dropout=dropout,
-            batch_first=True)
+            batch_first=True
+        )
 
         self.in_dim = in_dim
         self.num_hid = num_hid
@@ -49,21 +49,22 @@ class QuestionEmbedding(nn.Module):
         self.ndirections = 1 + int(bidirect)
 
     def init_hidden(self, batch):
-        # just to get the type of tensor
         weight = next(self.parameters()).data
         hid_shape = (self.nlayers * self.ndirections, batch, self.num_hid)
         if self.rnn_type == 'LSTM':
-            return (Variable(weight.new(*hid_shape).zero_()),
-                    Variable(weight.new(*hid_shape).zero_()))
+            return (
+                torch.zeros(*hid_shape, device=device),
+                torch.zeros(*hid_shape, device=device)
+            )
         else:
-            return Variable(weight.new(*hid_shape).zero_())
+            return torch.zeros(*hid_shape, device=device)
 
     def forward(self, x):
         # x: [batch, sequence, in_dim]
         batch = x.size(0)
         hidden = self.init_hidden(batch)
         self.rnn.flatten_parameters()
-        output, hidden = self.rnn(x, hidden)
+        output, _ = self.rnn(x.to(device), hidden)
 
         if self.ndirections == 1:
             return output[:, -1], output
@@ -77,5 +78,5 @@ class QuestionEmbedding(nn.Module):
         batch = x.size(0)
         hidden = self.init_hidden(batch)
         self.rnn.flatten_parameters()
-        output, hidden = self.rnn(x, hidden)
+        output, _ = self.rnn(x.to(device), hidden)
         return output

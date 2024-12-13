@@ -13,6 +13,11 @@ Install all requirements with ``pip install -r requirements.txt``
 
 Download UpDn features from [google drive](https://drive.google.com/drive/folders/111ipuYC0BeprYZhHXLzkRGeYAHcTT0WR?usp=sharing), which is the link from [this repo](https://github.com/GeraldHan/GGE), into ``/data/detection_features`` folder
 
+1. https://drive.google.com/file/d/1XAjKUS9dTOTLNiWV7LAAxlYk1Co4OUOQ/view?usp=sharing
+2. https://drive.google.com/file/d/182C36tR5iZ_CcQ5MGL1NoXKGLBFqs82H/view?usp=drive_link
+3. https://drive.google.com/file/d/1LBSaw9y4nRDJx3hnjwFEVmb5_I30flAd/view?usp=drive_link
+4. https://drive.google.com/file/d/1OAyXLKvjn-akNOGE6kHXgG6V-LmxDDB-/view?usp=drive_link
+
 Download questions/answers for VQA v2 and VQA-CP2 by executing ``bash tools/download.sh``
 
 Preprocess process the data with bash ``tools/process.sh``

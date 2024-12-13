@@ -4,118 +4,102 @@ import os
 
 import torch
 from torch.utils.data import DataLoader
-
 from dataset import Dictionary, VQAFeatureDataset
 import base_model
-
-from torch.autograd import Variable
-
 from tqdm import tqdm
 
-
+# Define device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def compute_score_with_logits(logits, labels):
-    logits = torch.argmax(logits, 1)
-    one_hots = torch.zeros(*labels.size()).cuda()
+    logits = torch.argmax(logits, dim=1)
+    one_hots = torch.zeros_like(labels, device=device)
     one_hots.scatter_(1, logits.view(-1, 1), 1)
-    scores = (one_hots * labels)
+    scores = (one_hots * labels).sum(dim=1)
     return scores
 
-
 def evaluate(model, dataloader, qid2type):
-    score = 0
-    upper_bound = 0
-    score_yesno = 0
-    score_number = 0
-    score_other = 0
-    total_yesno = 0
-    total_number = 0
-    total_other = 0 
+    score, upper_bound = 0, 0
+    score_yesno, score_number, score_other = 0, 0, 0
+    total_yesno, total_number, total_other = 0, 0, 0
 
     for v, q, a, qids in tqdm(dataloader, ncols=100, total=len(dataloader), desc="eval"):
-        v = Variable(v, requires_grad=False).cuda()
-        q = Variable(q, requires_grad=False).cuda()
+        v, q, a = v.to(device), q.to(device), a.to(device)
         pred = model(v, q)
-        batch_score = compute_score_with_logits(pred, a.cuda()).cpu().numpy().sum(1)
+
+        batch_score = compute_score_with_logits(pred, a).cpu().numpy()
         score += batch_score.sum()
-        upper_bound += (a.max(1)[0]).sum()
-        qids = qids.detach().cpu().int().numpy()
-        for j in range(len(qids)):
-            qid = qids[j]
+        upper_bound += a.max(dim=1)[0].sum().item()
+
+        qids = qids.cpu().numpy()
+        for idx, qid in enumerate(qids):
             typ = qid2type[str(qid)]
             if typ == 'yes/no':
-                score_yesno += batch_score[j]
+                score_yesno += batch_score[idx]
                 total_yesno += 1
-            elif typ == 'other':
-                score_other += batch_score[j]
-                total_other += 1
             elif typ == 'number':
-                score_number += batch_score[j]
+                score_number += batch_score[idx]
                 total_number += 1
-            else:
-                print('Hahahahahahahahahahaha')
+            elif typ == 'other':
+                score_other += batch_score[idx]
+                total_other += 1
 
-    score = score / len(dataloader.dataset)
-    upper_bound = upper_bound / len(dataloader.dataset)
-    score_yesno /= total_yesno
-    score_other /= total_other
-    score_number /= total_number
+    score /= len(dataloader.dataset)
+    upper_bound /= len(dataloader.dataset)
+    score_yesno = score_yesno / total_yesno if total_yesno > 0 else 0
+    score_number = score_number / total_number if total_number > 0 else 0
+    score_other = score_other / total_other if total_other > 0 else 0
 
-    return score, upper_bound, score_yesno, score_other, score_number
-
+    return score, upper_bound, score_yesno, score_number, score_other
 
 def parse_args():
-    parser = argparse.ArgumentParser("Train the BottomUpTopDown model with a de-biasing method")
+    parser = argparse.ArgumentParser("Evaluate the BottomUpTopDown model with a de-biasing method")
 
-    # Arguments we added
-    parser.add_argument('--cache_features', default=False, help="Cache image features in RAM. Makes things much faster"
-                        "especially if the filesystem is slow, but requires at least 48gb of RAM")
-    parser.add_argument('--dataset', default='cpv2', choices=["v2", "cpv2", "cpv1"], help="Run on VQA-2.0 instead of VQA-CP 2.0")
-    parser.add_argument('--num_hid', type=int, default=1024)
-    parser.add_argument('--model', type=str, default='baseline0_newatt')
-    parser.add_argument('--batch_size', type=int, default=512)
-    parser.add_argument('--seed', type=int, default=1111, help='random seed')
-    parser.add_argument('--load_path', type=str, default='best_model')
-    args = parser.parse_args()
-    return args
+    parser.add_argument('--cache_features', action='store_true', help="Cache image features in RAM for faster evaluation")
+    parser.add_argument('--dataset', default='cpv2', choices=["v2", "cpv2", "cpv1"], help="Dataset selection")
+    parser.add_argument('--num_hid', type=int, default=1024, help="Number of hidden units")
+    parser.add_argument('--model', type=str, default='baseline0_newatt', help="Model type")
+    parser.add_argument('--batch_size', type=int, default=512, help="Batch size")
+    parser.add_argument('--seed', type=int, default=1111, help="Random seed")
+    parser.add_argument('--load_path', type=str, default='best_model', help="Path to the trained model")
 
+    return parser.parse_args()
 
 def main():
     args = parse_args()
-    dataset=args.dataset
 
-    if dataset=='cpv1':
-        dictionary = Dictionary.load_from_file('data/dictionary_v1.pkl')
-    elif dataset=='cpv2' or dataset=='v2':
-        dictionary = Dictionary.load_from_file('data/dictionary.pkl')
+    # Load dataset and dictionary
+    dictionary_path = 'data/dictionary.pkl' if args.dataset in ['cpv2', 'v2'] else 'data/dictionary_v1.pkl'
+    dictionary = Dictionary.load_from_file(dictionary_path)
 
     print("Building test dataset...")
-    eval_dset = VQAFeatureDataset('val', dictionary, dataset=dataset,
-                                cache_image_features=args.cache_features)
+    eval_dset = VQAFeatureDataset('val', dictionary, dataset=args.dataset, cache_image_features=args.cache_features)
 
-    # Build the model using the original constructor
-    constructor = 'build_%s' % args.model
-    model = getattr(base_model, constructor)(eval_dset, args.num_hid).cuda()
+    # Build the model
+    constructor = f'build_{args.model}'
+    model = getattr(base_model, constructor)(eval_dset, args.num_hid).to(device)
 
-    with open('util/qid2type_%s.json'%args.dataset,'r') as f:
-        qid2type=json.load(f)
+    # Load pre-trained model
+    model_path = os.path.join(args.load_path, 'model.pth')
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    print("Loaded Model!")
 
-    ckpt = torch.load(os.path.join(args.load_path, 'model.pth'))
-    model.load_state_dict(ckpt)
-    print('Loaded Model!')
-
-    model=model.cuda()
     model.eval()
-    batch_size = args.batch_size
-
     torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
     torch.backends.cudnn.benchmark = True
 
-    eval_loader = DataLoader(eval_dset, batch_size, shuffle=False, num_workers=0)
-    eval_score, bound, yn, other, num = evaluate(model, eval_loader, qid2type)
-    print('\teval score: %.2f (%.2f)' % (100 * eval_score, 100 * bound))
-    print('\tyn score: %.2f other score: %.2f num score: %.2f' % (100 * yn, 100 * other, 100 * num))
+    # Load qid2type mapping
+    with open(f'util/qid2type_{args.dataset}.json', 'r') as f:
+        qid2type = json.load(f)
+
+    # Evaluation
+    eval_loader = DataLoader(eval_dset, batch_size=args.batch_size, shuffle=False, num_workers=4)
+    eval_score, bound, yn, num, other = evaluate(model, eval_loader, qid2type)
+
+    print(f'\teval score: {eval_score * 100:.2f} ({bound * 100:.2f})')
+    print(f'\tyn score: {yn * 100:.2f}, number score: {num * 100:.2f}, other score: {other * 100:.2f}')
 
 if __name__ == '__main__':
     main()
